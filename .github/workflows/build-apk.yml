@@ -1,0 +1,65 @@
+name: Build AI & Firebase APK
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+
+      - name: Deep Clean and Diagnostic
+        working-directory: ai_treasure_hunt
+        run: |
+          # 1. Delete problematic v1 embedding files explicitly
+          find android -name "GeneratedPluginRegistrant.java" -delete
+          find android -name "GeneratedPluginRegistrant.kt" -delete
+          rm -f android/local.properties
+
+          # 2. Reset Flutter cache
+          flutter clean
+          flutter pub get
+
+          # 3. Force Android Manifest to V2 embedding
+          sed -i 's/flutterEmbedding" android:value="1"/flutterEmbedding" android:value="2"/' android/app/src/main/AndroidManifest.xml || true
+
+          # 4. Diagnostic: Search for any remaining V1 markers to show in logs
+          echo "Checking for remaining V1 markers..."
+          grep -R "io.flutter.app" android || echo "No old imports found."
+          grep -R "registerWith" android || echo "No old registration calls found."
+
+      - name: Inject Firebase Configuration
+        working-directory: ai_treasure_hunt
+        run: |
+          mkdir -p android/app
+          echo "${{ secrets.FIREBASE_SERVICES_JSON }}" > android/app/google-services.json
+
+      - name: Build Debug APK
+        working-directory: ai_treasure_hunt
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GOOGLE_MAPS_API_KEY: ${{ secrets.GOOGLE_MAPS_API_KEY }}
+        run: |
+          flutter build apk --debug \
+            --dart-define=GEMINI_API_KEY=$GEMINI_API_KEY \
+            --dart-define=GOOGLE_MAPS_API_KEY=$GOOGLE_MAPS_API_KEY
+
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-treasure-hunt-apk
+          path: ai_treasure_hunt/build/app/outputs/flutter-apk/app-debug.apk
